@@ -1,71 +1,183 @@
 import { Colors } from '../../../../common/util/colors.js';
-import {
-  TypedArrayBufferView,
-  TypedArrayBufferViewConstructor,
-} from '../../../../common/util/util.js';
 import { GPUTest } from '../../../gpu_test.js';
-import { ScalarType, Scalar } from '../../../util/conversion.js';
+import { ScalarType, Scalar, Vector, Value, Type, TypeVec } from '../../../util/conversion.js';
 
-export type Case<T extends ScalarType> = {
-  input: Scalar<T>;
-  expected: Array<Scalar<T>>;
-};
+export interface Comparison {
+  matched: boolean;
+  got: string;
+  expected: string;
+}
 
-export function runShaderTest<F extends ScalarType>(
-  t: GPUTest,
-  storageClass: string,
-  storageMode: string,
-  type: string,
-  arrayLength: number,
-  builtin: string,
-  arrayType: TypedArrayBufferViewConstructor,
-  cases: Array<Case<F>>
-): void {
-  const source = `
-    [[block]]
-    struct Data {
-      values : [[stride(16)]] array<${type}, ${cases.length}>;
-    };
+export interface Comparator {
+  (got: Value): Comparison;
+}
 
-    [[group(0), binding(0)]] var<${storageClass}, ${storageMode}> inputs : Data;
-    [[group(0), binding(1)]] var<${storageClass}, write> outputs : Data;
-
-    [[stage(compute), workgroup_size(1)]]
-    fn main() {
-      for(var i = 0; i < ${cases.length}; i = i + 1) {
-          let input : ${type} = inputs.values[i];
-          let result : ${type} = ${builtin}(input);
-          outputs.values[i] = result;
-      }
-    }
-  `;
-
-  const inputData: TypedArrayBufferView = new arrayType(cases.length * 4);
-
-  // an arbitrary approach of mapping cases into inputData:
-  // if the arrayLength > 1, ie. type is a vector, or matrix then
-  //   fill the i-th element with the input value of cases[i+j]
-  // if arrayLength = 1 or i+j > length of cases
-  //   fill the i-th element with input value of  cases[i]
-  // TODO(sarahM0): This is using a TypedArray to convert the value into bits,
-  // but Scalar already has bits. There's a chance some numbers won't get the same bit pattern both ways
-  // (having been converted from bits to double back to bits). Probably best to copy the bits in directly.
-  for (let i = 0; i < cases.length; i++) {
-    for (let j = 0; j < arrayLength; j++) {
-      inputData[i * 4 + j] = (i + j < cases.length
-        ? cases[i + j].input.value
-        : cases[i].input.value) as number;
+function diff(got: Value, expected: Value): Comparison {
+  {
+    // Check types
+    const gTy = got.type;
+    const eTy = expected.type;
+    if (gTy !== eTy) {
+      return {
+        matched: false,
+        got: `${Colors.red(gTy.toString())}(${got})`,
+        expected: `${Colors.red(eTy.toString())}(${expected})`,
+      };
     }
   }
 
+  if (got instanceof Scalar) {
+    const g = got;
+    const e = expected as Scalar;
+    if (g.value === e.value) {
+      return {
+        matched: true,
+        got: g.toString(),
+        expected: Colors.green(e.toString()),
+      };
+    }
+    return {
+      matched: false,
+      got: g.toString(),
+      expected: Colors.red(e.toString()),
+    };
+  }
+  if (got instanceof Vector) {
+    const gLen = got.elements.length;
+    const eLen = (expected as Vector).elements.length;
+    let matched = gLen === eLen;
+    const gElements = new Array<string>(gLen);
+    const eElements = new Array<string>(eLen);
+    for (let i = 0; i < Math.max(gLen, eLen); i++) {
+      if (i < gLen && i < eLen) {
+        const g = got.elements[i];
+        const e = (expected as Vector).elements[i];
+        const d = diff(g, e);
+        matched = matched && d.matched;
+        gElements[i] = d.got;
+        eElements[i] = d.expected;
+        continue;
+      }
+      matched = false;
+      if (i < gLen) {
+        gElements[i] = got.elements[i].toString();
+      }
+      if (i < eLen) {
+        eElements[i] = (expected as Vector).elements[i].toString();
+      }
+    }
+    return {
+      matched,
+      got: `${got.type}(${gElements.join(', ')})`,
+      expected: `${expected.type}(${eElements.join(', ')})`,
+    };
+  }
+  throw new Error(`unhandled type '${typeof got}`);
+}
+
+export function anyOf(...values: Value[]): Comparator {
+  return got => {
+    const failed: Array<string> = [];
+    for (const e of values) {
+      const d = diff(got, e);
+      if (d.matched) {
+        return d;
+      }
+      failed.push(d.expected);
+    }
+    return { matched: false, got: got.toString(), expected: failed.join(' or ') };
+  };
+}
+
+function toComparator(input: Value | Comparator): Comparator {
+  if ((input as Value).type !== undefined) {
+    return got => diff(got, input as Value);
+  }
+  return input as Comparator;
+}
+
+// Case is a single builtin test case.
+export type Case = {
+  input: Array<Value>;
+  expected: Value | Comparator;
+};
+
+export type CaseList = Array<Case>;
+
+export type Config = {
+  storageClass: 'uniform' | 'storage';
+  storageMode: 'read_write' | 'read';
+  vectorize?: number;
+};
+
+export function run(
+  t: GPUTest,
+  builtin: string,
+  parameterTypes: Array<Type>,
+  returnType: Type,
+  cfg: Config = { storageClass: 'storage', storageMode: 'read' },
+  cases: CaseList
+) {
+  if (cfg.vectorize !== undefined) {
+    cases = packScalarsToVector(cases, cfg.vectorize);
+    parameterTypes = [TypeVec(cfg.vectorize, parameterTypes[0] as ScalarType)];
+    returnType = TypeVec(cfg.vectorize, returnType as ScalarType);
+  }
+
+  const kValueStride = 16;
+
+  const source = `
+struct Parameters {
+${parameterTypes.map((ty, i) => `  [[size(${kValueStride})]] param${i} : ${ty};`).join('\n')}
+};
+
+[[block]]
+struct Inputs {
+  test : array<Parameters, ${cases.length}>;
+};
+
+[[block]]
+struct Outputs {
+  test : [[stride(${kValueStride})]] array<${returnType}, ${cases.length}>;
+};
+
+${
+  cfg.storageClass === 'storage'
+    ? `[[group(0), binding(0)]] var<storage, ${cfg.storageMode}> inputs : Inputs;`
+    : `[[group(0), binding(0)]] var<uniform> inputs : Inputs;`
+}
+[[group(0), binding(1)]] var<storage, write> outputs : Outputs;
+
+[[stage(compute), workgroup_size(1)]]
+fn main() {
+  for(var i = 0; i < ${cases.length}; i = i + 1) {
+      outputs.test[i] = ${builtin}(${parameterTypes
+    .map((_, i) => `inputs.test[i].param${i}`)
+    .join(', ')});
+  }
+}
+`;
+
+  const inputData = new Uint8Array(cases.length * parameterTypes.length * kValueStride);
+  {
+    const caseStride = kValueStride * parameterTypes.length;
+    for (let caseIdx = 0; caseIdx < cases.length; caseIdx++) {
+      const caseBase = caseIdx * caseStride;
+      for (let paramIdx = 0; paramIdx < parameterTypes.length; paramIdx++) {
+        const offset = caseBase + paramIdx * kValueStride;
+        cases[caseIdx].input[paramIdx].copyTo(inputData, offset);
+      }
+    }
+  }
   const inputBuffer = t.makeBufferWithContents(
     inputData,
-    GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE
+    GPUBufferUsage.COPY_SRC |
+      (cfg.storageClass === 'storage' ? GPUBufferUsage.STORAGE : GPUBufferUsage.UNIFORM)
   );
 
+  const outputBufferSize = cases.length * kValueStride;
   const outputBuffer = t.device.createBuffer({
-    // TODO(sarahM0): investigate why "size: cases.length*4*arrayLength" returns zero
-    size: inputData.length * 4,
+    size: outputBufferSize,
     usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE,
   });
 
@@ -91,74 +203,24 @@ export function runShaderTest<F extends ScalarType>(
 
   t.queue.submit([encoder.finish()]);
 
-  // Returns the string representation of num using the specified color.
-  const formatNum = (num: number | bigint, color = Colors.reset) => {
-    switch (num) {
-      case 0:
-      case Infinity:
-      case -Infinity:
-        return color.bold(num.toString());
-      default:
-        return color.bold(num.toString()) + color(' (0x' + num.toString(16) + ')');
+  const checkExpectation = (outputData: Uint8Array) => {
+    const outputs = new Array<Value>(cases.length);
+    for (let i = 0; i < cases.length; i++) {
+      outputs[i] = returnType.read(outputData, i * kValueStride);
     }
-  };
 
-  const checkExpectation = (outputData: typeof inputData) => {
     // The list of expectation failures
     const errs: string[] = [];
 
     // For each case...
-    for (let i = 0; i < cases.length; i++) {
-      // String representations of the input, output and expectation values for this case.
-      const inputValue: string[] = [];
-      const outputValue: string[] = [];
-      const expectedValue: string[] = [];
-      let caseMatched = true;
-
-      // For each element in the case...
-      for (let j = 0; j < arrayLength; j++) {
-        const idx = i * 4 + j;
-        const expectedIndex = i + j < cases.length ? i + j : i;
-        inputValue.push(formatNum(inputData[idx]));
-
-        // `cases[expectedIndex].expected` is an array of values that are treated as a pass.
-        // Do any of these expected values match?
-        const elementMatched = cases[expectedIndex].expected.some(e => e.value === outputData[idx]);
-        outputValue.push(formatNum(outputData[idx], elementMatched ? Colors.green : Colors.red));
-
-        const caseExpected: string[] = [];
-        for (const e of cases[expectedIndex].expected) {
-          if (outputData[idx] === e.value) {
-            // This expected value matched
-            caseExpected.push(formatNum(e.value, Colors.green));
-          } else if (elementMatched) {
-            // The element matched, but it wasn't for this value.
-            caseExpected.push(formatNum(e.value, Colors.grey));
-          } else {
-            // The element did not match any expected value
-            caseExpected.push(formatNum(e.value, Colors.red));
-          }
-        }
-        expectedValue.push(caseExpected.join(' or '));
-
-        // If none of the expected values matched, then the case has failed.
-        caseMatched = caseMatched && elementMatched;
-      }
-
-      if (!caseMatched) {
-        if (arrayLength > 1) {
-          errs.push(
-            `${builtin}(${type}(${inputValue.join(', ')}))\n` +
-              `    returned: ${type}(${outputValue.join(', ')})\n` +
-              `    expected: ${type}(${expectedValue.join(', ')})`
-          );
-        } else {
-          errs.push(
-            `${builtin}(${inputValue.join(', ')})\n` +
-              `    returned: ${outputValue.join(', ')}\n` +
-              `    expected: ${expectedValue.join(', ')}`
-          );
-        }
+    for (let caseIdx = 0; caseIdx < cases.length; caseIdx++) {
+      const c = cases[caseIdx];
+      const got = outputs[caseIdx];
+      const cmp = toComparator(c.expected)(got);
+      if (!cmp.matched) {
+        errs.push(`${builtin}(${c.input.join(', ')})
+    returned: ${cmp.got}
+    expected: ${cmp.expected}`);
       }
     }
 
@@ -169,9 +231,53 @@ export function runShaderTest<F extends ScalarType>(
   };
 
   t.expectGPUBufferValuesPassCheck(outputBuffer, checkExpectation, {
-    type: arrayType,
-    typedLength: inputData.length,
+    type: Uint8Array,
+    typedLength: outputBufferSize,
   });
+}
+
+// Packs a list of scalar test cases into a smaller list of vector cases.
+export function packScalarsToVector(cases: CaseList, vectorWidth: number): CaseList {
+  const asScalar = function (val: Array<Value>): Scalar {
+    if (val.length !== 1 || !(val[0] instanceof Scalar)) {
+      throw new Error('packScalarsToVector() requires all Case values to a single scalar Value');
+    }
+    return val[0];
+  };
+  const clampCaseIdx = (idx: number) => Math.min(idx, cases.length - 1);
+  const packed: Array<Case> = [];
+  let caseIdx = 0;
+  while (caseIdx < cases.length) {
+    const inputElements = new Array<Scalar>(vectorWidth);
+    const comparators = new Array<Comparator>(vectorWidth);
+    for (let i = 0; i < vectorWidth; i++) {
+      const c = cases[clampCaseIdx(caseIdx + i)];
+      inputElements[i] = asScalar(c.input);
+      comparators[i] = toComparator(c.expected);
+    }
+    const vec = new Vector(inputElements);
+    packed.push({
+      input: [vec],
+      expected: (got: Value) => {
+        let matched = true;
+        const gElements = new Array<string>(vectorWidth);
+        const eElements = new Array<string>(vectorWidth);
+        for (let i = 0; i < vectorWidth; i++) {
+          const d = comparators[i]((got as Vector).elements[i]);
+          matched = matched && d.matched;
+          gElements[i] = d.got;
+          eElements[i] = d.expected;
+        }
+        return {
+          matched,
+          got: `${vec.type}(${gElements.join(', ')})`,
+          expected: `${vec.type}(${eElements.join(', ')})`,
+        };
+      },
+    });
+    caseIdx += vectorWidth;
+  }
+  return packed;
 }
 
 // TODO(sarahM0): Perhaps instead of kBit and kValue tables we could have one table

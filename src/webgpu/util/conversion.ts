@@ -1,4 +1,5 @@
-import { assert } from '../../common/util/util.js';
+import { Colors } from '../../common/util/colors.js';
+import { assert, TypedArrayBufferView } from '../../common/util/util.js';
 
 import { clamp } from './math.js';
 
@@ -224,168 +225,263 @@ export function uint32ToInt32(u32: number): number {
 }
 
 /** A type of number representable by Scalar. */
-export type ScalarType =
-  | 'f64'
-  | 'f32'
-  | 'f16'
-  | 'u64'
-  | 'u32'
-  | 'u16'
-  | 'u8'
-  | 'i64'
-  | 'i32'
-  | 'i16'
-  | 'i8';
+export type ScalarKind = 'f32' | 'f16' | 'u32' | 'u16' | 'u8' | 'i32' | 'i16' | 'i8' | 'bool';
 
-/** Figures out the type that Scalar uses to represent its numeric value. */
-type ScalarValue<T extends ScalarType> = T extends 'u64' | 'i64' ? bigint : number;
-/** Figures out the TypedArray type that Scalar uses to represent its bit representation. */
-type ScalarBits<T extends ScalarType> = T extends 'u64' | 'i64' | 'f64'
-  ? BigUint64Array
-  : T extends 'u32' | 'i32' | 'f32'
-  ? Uint32Array
-  : T extends 'u16' | 'i16' | 'f16'
-  ? Uint16Array
-  : Uint8Array;
+export class ScalarType {
+  readonly kind: ScalarKind;
+  readonly size: number; // In bytes
+  readonly read: (buf: Uint8Array, offset: number) => Scalar;
 
-/**
- * Class that encapsulates a single number of various types. Exposes:
- * - the actual numeric value (as a JS `number`, or `bigint` if it's u64/i64)
- * - the bit representation of the number, as a TypedArray of size 1 with the appropriate type.
- */
-export class Scalar<T extends ScalarType> {
-  readonly value: ScalarValue<T>;
-  readonly bits: ScalarBits<T>;
+  constructor(kind: ScalarKind, size: number, read: (buf: Uint8Array, offset: number) => Scalar) {
+    this.kind = kind;
+    this.size = size;
+    this.read = read;
+  }
 
-  private constructor(value: ScalarValue<T>, bits: ScalarBits<T>) {
+  public toString(): string {
+    return this.kind;
+  }
+}
+
+export class VectorType {
+  readonly width: number;
+  readonly elementType: ScalarType;
+
+  constructor(width: number, elementType: ScalarType) {
+    this.width = width;
+    this.elementType = elementType;
+  }
+
+  public read(buf: Uint8Array, offset: number): Vector {
+    const elements: Array<Scalar> = [];
+    for (let i = 0; i < this.width; i++) {
+      elements[i] = this.elementType.read(buf, offset);
+      offset += this.elementType.size;
+    }
+    return new Vector(elements);
+  }
+
+  public toString(): string {
+    return `vec${this.width}<${this.elementType}>`;
+  }
+}
+
+const vectorTypes = new Map<{ width: number; elementType: ScalarType }, VectorType>();
+
+export function TypeVec(width: number, elementType: ScalarType): VectorType {
+  const key = { width, elementType };
+  let ty = vectorTypes.get(key);
+  if (ty !== undefined) {
+    return ty;
+  }
+  ty = new VectorType(width, elementType);
+  vectorTypes.set(key, ty);
+  return ty;
+}
+
+export type Type = ScalarType | VectorType;
+
+export const TypeI32 = new ScalarType('i32', 4, (buf: Uint8Array, offset: number) =>
+  I32(new Int32Array(buf.buffer, offset)[0])
+);
+export const TypeU32 = new ScalarType('u32', 4, (buf: Uint8Array, offset: number) =>
+  U32(new Uint32Array(buf.buffer, offset)[0])
+);
+export const TypeF32 = new ScalarType('f32', 4, (buf: Uint8Array, offset: number) =>
+  F32(new Float32Array(buf.buffer, offset)[0])
+);
+export const TypeI16 = new ScalarType('i16', 2, (buf: Uint8Array, offset: number) =>
+  I16(new Int16Array(buf.buffer, offset)[0])
+);
+export const TypeU16 = new ScalarType('u16', 2, (buf: Uint8Array, offset: number) =>
+  U16(new Uint16Array(buf.buffer, offset)[0])
+);
+export const TypeF16 = new ScalarType('f16', 2, (buf: Uint8Array, offset: number) =>
+  F16Bits(new Uint16Array(buf.buffer, offset)[0])
+);
+export const TypeI8 = new ScalarType('i8', 1, (buf: Uint8Array, offset: number) =>
+  I8(new Int8Array(buf.buffer, offset)[0])
+);
+export const TypeU8 = new ScalarType('u8', 1, (buf: Uint8Array, offset: number) =>
+  U8(new Uint8Array(buf.buffer, offset)[0])
+);
+
+export function numElementsOf(ty: Type): number {
+  if (ty instanceof ScalarType) {
+    return 1;
+  }
+  if (ty instanceof VectorType) {
+    return ty.width;
+  }
+  throw new Error(`unhandled type ${ty}`);
+}
+
+export function scalarTypeOf(ty: Type): ScalarType {
+  if (ty instanceof ScalarType) {
+    return ty;
+  }
+  if (ty instanceof VectorType) {
+    return ty.elementType;
+  }
+  throw new Error(`unhandled type ${ty}`);
+}
+
+type ScalarValue = Boolean | Number;
+
+/** Class that encapsulates a single scalar value of various types. */
+export class Scalar {
+  readonly value: ScalarValue;
+  readonly type: ScalarType;
+  readonly bits: Uint8Array;
+
+  public constructor(type: ScalarType, value: ScalarValue, bits: TypedArrayBufferView) {
     this.value = value;
-    this.bits = bits;
+    this.type = type;
+    this.bits = new Uint8Array(bits.buffer);
   }
 
-  /** Create an f64 from a numeric value, a JS `number`. */
-  static fromF64(value: number) {
-    return new Scalar<'f64'>(value, new BigUint64Array(new Float64Array([value]).buffer));
-  }
-  /** Create an f32 from a numeric value, a JS `number`. */
-  static fromF32(value: number) {
-    return new Scalar<'f32'>(value, new Uint32Array(new Float32Array([value]).buffer));
+  public copyTo(buffer: Uint8Array, offset: number) {
+    for (let i = 0; i < this.bits.length; i++) {
+      buffer[offset + i] = this.bits[i];
+    }
   }
 
-  /** Create an f64 from a bit representation, a uint64 represented as a JS `bigint`. */
-  static fromF64Bits(bits: bigint) {
-    const abv = new BigUint64Array([bits]);
-    return new Scalar<'f64'>(new Float64Array(abv.buffer)[0], abv);
+  public toString(): string {
+    switch (this.value) {
+      case 0:
+      case Infinity:
+      case -Infinity:
+        return Colors.bold(this.value.toString());
+      default:
+        return Colors.bold(this.value.toString()) + ' (0x' + this.value.toString(16) + ')';
+    }
   }
-  /** Create an f32 from a bit representation, a uint32 represented as a JS `number`. */
-  static fromF32Bits(bits: number) {
-    const abv = new Uint32Array([bits]);
-    return new Scalar<'f32'>(new Float32Array(abv.buffer)[0], abv);
-  }
-  /** Create an f16 from a bit representation, a uint16 represented as a JS `number`. */
-  static fromF16Bits(bits: number) {
-    return new Scalar<'f16'>(float16BitsToFloat32(bits), new Uint16Array(bits));
-  }
+}
 
-  /** Create an i32 from a numeric value, a JS `number`. */
-  static fromI32(value: number) {
-    return new Scalar<'i32'>(value, new Uint32Array(new Int32Array([value]).buffer));
-  }
-  /** Create an i16 from a numeric value, a JS `number`. */
-  static fromI16(value: number) {
-    return new Scalar<'i16'>(value, new Uint16Array(new Int16Array([value]).buffer));
-  }
-  /** Create an i8 from a numeric value, a JS `number`. */
-  static fromI8(value: number) {
-    return new Scalar<'i8'>(value, new Uint8Array(new Int8Array([value]).buffer));
-  }
+/** Create an f32 from a numeric value, a JS `number`. */
+export function F32(value: number): Scalar {
+  return new Scalar(TypeF32, value, new Float32Array([value]));
+}
+/** Create an f32 from a bit representation, a uint32 represented as a JS `number`. */
+export function F32Bits(bits: number): Scalar {
+  const arr = new Uint32Array([bits]);
+  return new Scalar(TypeF32, new Float32Array(arr.buffer)[0], arr);
+}
+/** Create an f16 from a bit representation, a uint16 represented as a JS `number`. */
+export function F16Bits(bits: number): Scalar {
+  const arr = new Uint32Array([bits]);
+  return new Scalar(TypeF16, float16BitsToFloat32(bits), arr);
+}
 
-  /** Create an i32 from a bit representation, a uint32 represented as a JS `number`. */
-  static fromI32Bits(bits: number) {
-    const abv = new Uint32Array([bits]);
-    return new Scalar<'i32'>(new Int32Array(abv.buffer)[0], abv);
-  }
-  /** Create an i16 from a bit representation, a uint16 represented as a JS `number`. */
-  static fromI16Bits(bits: number) {
-    const abv = new Uint16Array([bits]);
-    return new Scalar<'i16'>(new Int16Array(abv.buffer)[0], abv);
-  }
-  /** Create an i8 from a bit representation, a uint8 represented as a JS `number`. */
-  static fromI8Bits(bits: number) {
-    const abv = new Uint8Array([bits]);
-    return new Scalar<'i8'>(new Int8Array(abv.buffer)[0], abv);
-  }
+/** Create an i32 from a numeric value, a JS `number`. */
+export function I32(value: number): Scalar {
+  return new Scalar(TypeI32, value, new Int32Array([value]));
+}
+/** Create an i16 from a numeric value, a JS `number`. */
+export function I16(value: number): Scalar {
+  return new Scalar(TypeI16, value, new Int16Array([value]));
+}
+/** Create an i8 from a numeric value, a JS `number`. */
+export function I8(value: number): Scalar {
+  return new Scalar(TypeI8, value, new Int8Array([value]));
+}
 
-  /** Create a u32 from a numeric value, a JS `number`. */
-  static fromU32(value: number) {
-    return new Scalar<'u32'>(value, new Uint32Array(value));
-  }
-  /** Create a u16 from a numeric value, a JS `number`. */
-  static fromU16(value: number) {
-    return new Scalar<'u16'>(value, new Uint16Array(value));
-  }
-  /** Create a u8 from a numeric value, a JS `number`. */
-  static fromU8(value: number) {
-    return new Scalar<'u8'>(value, new Uint8Array(value));
-  }
+/** Create an i32 from a bit representation, a uint32 represented as a JS `number`. */
+export function I32Bits(bits: number): Scalar {
+  const arr = new Uint32Array([bits]);
+  return new Scalar(TypeI32, new Int32Array(arr.buffer)[0], arr);
+}
+/** Create an i16 from a bit representation, a uint16 represented as a JS `number`. */
+export function I16Bits(bits: number): Scalar {
+  const arr = new Uint16Array([bits]);
+  return new Scalar(TypeI16, new Int16Array(arr.buffer)[0], arr);
+}
+/** Create an i8 from a bit representation, a uint8 represented as a JS `number`. */
+export function I8Bits(bits: number): Scalar {
+  const arr = new Uint8Array([bits]);
+  return new Scalar(TypeI8, new Int8Array(arr.buffer)[0], arr);
+}
 
-  /** Create a u32 from a bit representation, a uint32 represented as a JS `number`. */
-  static fromU32Bits(bits: number) {
-    const abv = new Uint32Array([bits]);
-    return new Scalar<'u32'>(new Uint32Array(abv.buffer)[0], abv);
-  }
-  /** Create a u16 from a bit representation, a uint16 represented as a JS `number`. */
-  static fromU16Bits(bits: number) {
-    const abv = new Uint16Array([bits]);
-    return new Scalar<'u16'>(new Uint16Array(abv.buffer)[0], abv);
-  }
-  /** Create a u8 from a bit representation, a uint8 represented as a JS `number`. */
-  static fromU8Bits(bits: number) {
-    const abv = new Uint8Array([bits]);
-    return new Scalar<'u8'>(new Uint8Array(abv.buffer)[0], abv);
-  }
+/** Create a u32 from a numeric value, a JS `number`. */
+export function U32(value: number): Scalar {
+  return new Scalar(TypeU32, value, new Uint32Array([value]));
+}
+/** Create a u16 from a numeric value, a JS `number`. */
+export function U16(value: number): Scalar {
+  return new Scalar(TypeU16, value, new Uint16Array([value]));
+}
+/** Create a u8 from a numeric value, a JS `number`. */
+export function U8(value: number): Scalar {
+  return new Scalar(TypeU8, value, new Uint8Array([value]));
+}
+
+/** Create an u32 from a bit representation, a uint32 represented as a JS `number`. */
+export function U32Bits(bits: number): Scalar {
+  const arr = new Uint32Array([bits]);
+  return new Scalar(TypeU32, bits, arr);
+}
+/** Create an u16 from a bit representation, a uint16 represented as a JS `number`. */
+export function U16Bits(bits: number): Scalar {
+  const arr = new Uint16Array([bits]);
+  return new Scalar(TypeU16, bits, arr);
+}
+/** Create an u8 from a bit representation, a uint8 represented as a JS `number`. */
+export function U8Bits(bits: number): Scalar {
+  const arr = new Uint8Array([bits]);
+  return new Scalar(TypeU8, bits, arr);
 }
 
 /**
- * Class that encapsulates a 2-element vector of type T.
+ * Class that encapsulates a vector value.
  */
-export class Vec2<T extends ScalarType> {
-  readonly x: Scalar<T>;
-  readonly y: Scalar<T>;
+export class Vector {
+  readonly elements: Array<Scalar>;
+  readonly type: VectorType;
 
-  public constructor(x: Scalar<T>, y: Scalar<T>) {
-    this.x = x;
-    this.y = y;
+  public get x() {
+    return this.elements[0];
+  }
+
+  public get y() {
+    return this.elements[1];
+  }
+
+  public get z() {
+    return this.elements[2];
+  }
+
+  public get w() {
+    return this.elements[3];
+  }
+
+  public constructor(elements: Array<Scalar>) {
+    if (elements.length < 2 || elements.length > 4) {
+      throw new Error(`vector element count must be between 2 and 4, got ${elements.length}`);
+    }
+    for (let i = 1; i < elements.length; i++) {
+      const a = elements[0].type;
+      const b = elements[i].type;
+      if (a !== b) {
+        throw new Error(
+          `cannot mix vector element types. Found elements with types '${a}' and '${b}'`
+        );
+      }
+    }
+    this.elements = elements;
+    this.type = TypeVec(elements.length, elements[0].type);
+  }
+
+  public copyTo(buffer: Uint8Array, offset: number) {
+    for (const element of this.elements) {
+      element.copyTo(buffer, offset);
+      offset += this.type.elementType.size;
+    }
+  }
+
+  public toString(): string {
+    return `${this.type}(${this.elements.map(e => e.toString()).join(', ')})`;
   }
 }
 
-/**
- * Class that encapsulates a 3-element vector of type T.
- */
-export class Vec3<T extends ScalarType> {
-  readonly x: Scalar<T>;
-  readonly y: Scalar<T>;
-  readonly z: Scalar<T>;
-
-  public constructor(x: Scalar<T>, y: Scalar<T>, z: Scalar<T>) {
-    this.x = x;
-    this.y = y;
-    this.z = z;
-  }
-}
-
-/**
- * Class that encapsulates a 4-element vector of type T.
- */
-export class Vec4<T extends ScalarType> {
-  readonly x: Scalar<T>;
-  readonly y: Scalar<T>;
-  readonly z: Scalar<T>;
-  readonly w: Scalar<T>;
-
-  public constructor(x: Scalar<T>, y: Scalar<T>, z: Scalar<T>, w: Scalar<T>) {
-    this.x = x;
-    this.y = y;
-    this.z = z;
-    this.w = w;
-  }
-}
+/** Value is a Scalar or Vector type. */
+export type Value = Scalar | Vector;
