@@ -344,3 +344,48 @@ export class Scalar<T extends ScalarType> {
     return new Scalar<'u8'>(new Uint8Array(abv.buffer)[0], abv);
   }
 }
+
+/**
+ * Class that encapsulates a 2-element vector of type T.
+ */
+export class Vec2<T extends ScalarType> {
+  readonly x: Scalar<T>;
+  readonly y: Scalar<T>;
+
+  public constructor(x: Scalar<T>, y: Scalar<T>) {
+    this.x = x;
+    this.y = y;
+  }
+}
+
+/**
+ * Class that encapsulates a 3-element vector of type T.
+ */
+export class Vec3<T extends ScalarType> {
+  readonly x: Scalar<T>;
+  readonly y: Scalar<T>;
+  readonly z: Scalar<T>;
+
+  public constructor(x: Scalar<T>, y: Scalar<T>, z: Scalar<T>) {
+    this.x = x;
+    this.y = y;
+    this.z = z;
+  }
+}
+
+/**
+ * Class that encapsulates a 4-element vector of type T.
+ */
+export class Vec4<T extends ScalarType> {
+  readonly x: Scalar<T>;
+  readonly y: Scalar<T>;
+  readonly z: Scalar<T>;
+  readonly w: Scalar<T>;
+
+  public constructor(x: Scalar<T>, y: Scalar<T>, z: Scalar<T>, w: Scalar<T>) {
+    this.x = x;
+    this.y = y;
+    this.z = z;
+    this.w = w;
+  }
+}
