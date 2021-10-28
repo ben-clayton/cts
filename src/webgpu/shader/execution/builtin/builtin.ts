@@ -4,14 +4,14 @@ import {
   TypedArrayBufferViewConstructor,
 } from '../../../../common/util/util.js';
 import { GPUTest } from '../../../gpu_test.js';
-import { NumberType, NumberRepr } from '../../../util/conversion.js';
+import { ScalarType, Scalar } from '../../../util/conversion.js';
 
-export type Case<T extends NumberType> = {
-  input: NumberRepr<T>;
-  expected: Array<NumberRepr<T>>;
+export type Case<T extends ScalarType> = {
+  input: Scalar<T>;
+  expected: Array<Scalar<T>>;
 };
 
-export function runShaderTest<F extends NumberType>(
+export function runShaderTest<F extends ScalarType>(
   t: GPUTest,
   storageClass: string,
   storageMode: string,
@@ -48,7 +48,7 @@ export function runShaderTest<F extends NumberType>(
   // if arrayLength = 1 or i+j > length of cases
   //   fill the i-th element with input value of  cases[i]
   // TODO(sarahM0): This is using a TypedArray to convert the value into bits,
-  // but NumberRepr already has bits. There's a chance some numbers won't get the same bit pattern both ways
+  // but Scalar already has bits. There's a chance some numbers won't get the same bit pattern both ways
   // (having been converted from bits to double back to bits). Probably best to copy the bits in directly.
   for (let i = 0; i < cases.length; i++) {
     for (let j = 0; j < arrayLength; j++) {
@@ -175,10 +175,10 @@ export function runShaderTest<F extends NumberType>(
 }
 
 // TODO(sarahM0): Perhaps instead of kBit and kValue tables we could have one table
-// where every value is a NumberRepr instead of either bits or value?
-// Then tests wouldn't need most of the NumberRepr.fromX calls,
+// where every value is a Scalar instead of either bits or value?
+// Then tests wouldn't need most of the Scalar.fromX calls,
 // and you would probably need fewer table entries in total
-// (since each NumberRepr has both bits and value).
+// (since each Scalar has both bits and value).
 export const kBit = {
   // Limits of int32
   i32: {
