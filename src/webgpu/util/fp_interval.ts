@@ -49,56 +49,34 @@ export class FPInterval {
   }
 }
 
-export interface FPUnaryIntervalBuilder {
-  singular(x: number): FPInterval;
-  range?(i: FPInterval): FPInterval;
+function begin(n: number | FPInterval): number {
+  const i = n as FPInterval;
+  return i.begin !== undefined ? i.begin : (n as number);
 }
 
-export interface FPBinaryIntervalBuilder {
-  singular(x: number, y: number): FPInterval;
-  range?(ix: FPInterval, iy: FPInterval): FPInterval;
+function end(n: number | FPInterval): number {
+  const i = n as FPInterval;
+  return i.end !== undefined ? i.end : (n as number);
 }
 
-class AbsoluteFPIntervalBuilder implements FPUnaryIntervalBuilder {
-  protected readonly n: number;
-
-  public constructor(n: number) {
-    this.n = Math.abs(n);
-  }
-
-  public singular(x: number): FPInterval {
-    assert(!Number.isNaN(x), `absolute not defined for NaN`);
-    return FPInterval.span(this.impl(x), this.impl(flushSubnormalNumber(x)));
-  }
-
-  public range(i: FPInterval): FPInterval {
-    if (i.begin === i.end) {
-      return this.singular(i.begin);
-    }
-    return FPInterval.span(this.singular(i.begin), this.singular(i.end));
-  }
-
-  private impl(x: number): FPInterval {
-    return new FPInterval(x - this.n, x + this.n);
-  }
+export interface NumberToInterval {
+  (x: number): FPInterval;
 }
 
-class CorrectlyRoundedFPIntervalBuilder implements FPUnaryIntervalBuilder {
-  public constructor() {}
+export function flushInterval(n: number, fn: NumberToInterval) {
+  return FPInterval.span(fn(n), fn(flushSubnormalNumber(n)));
+}
 
-  public singular(x: number): FPInterval {
-    assert(!Number.isNaN(x), `correctlyRounded not defined for NaN`);
-    return FPInterval.span(this.impl(x), this.impl(flushSubnormalNumber(x)));
-  }
+export function absoluteInterval(n: number, rng: number): FPInterval {
+  rng = Math.abs(rng);
+  return flushInterval(n, (n: number) => {
+    assert(!Number.isNaN(n), `absolute not defined for NaN`);
+    return new FPInterval(n - rng, n + rng);
+  });
+}
 
-  public range(i: FPInterval): FPInterval {
-    if (i.begin === i.end) {
-      return this.singular(i.begin);
-    }
-    return FPInterval.span(this.singular(i.begin), this.singular(i.end));
-  }
-
-  private impl(x: number): FPInterval {
+export function correctlyRoundedFPInterval(n: number): NumberToInterval {
+  return (x: number) => {
     if (x === Number.POSITIVE_INFINITY || x > kValue.f32.positive.max) {
       return new FPInterval(kValue.f32.positive.max, Number.POSITIVE_INFINITY);
     }
@@ -123,116 +101,47 @@ class CorrectlyRoundedFPIntervalBuilder implements FPUnaryIntervalBuilder {
       const otherside = nextAfter(x_32, false, false).value as number;
       return new FPInterval(converted, otherside);
     }
-  }
+  };
 }
 
-class ULPFPIntervalBuilder implements FPUnaryIntervalBuilder {
-  protected readonly n: number;
-
-  public constructor(n: number) {
-    this.n = Math.abs(n);
-  }
-
-  public singular(x: number): FPInterval {
-    assert(!Number.isNaN(x), `ULP not defined for NaN`);
-    return FPInterval.span(this.impl(x), this.impl(flushSubnormalNumber(x)));
-  }
-
-  public range(i: FPInterval): FPInterval {
-    if (i.begin === i.end) {
-      return this.singular(i.begin);
-    }
-    return FPInterval.span(this.singular(i.begin), this.singular(i.end));
-  }
-
-  private impl(x: number): FPInterval {
-    const ulp_flush = oneULP(x, true);
-    const ulp_noflush = oneULP(x, false);
-    const ulp = Math.max(ulp_flush, ulp_noflush);
-
-    return new FPInterval(x - this.n * ulp, x + this.n * ulp);
-  }
+export function ulpInterval(n: number, numULP: number): FPInterval {
+  numULP = Math.abs(numULP);
+  const ulp_flush = oneULP(n, true);
+  const ulp_noflush = oneULP(n, false);
+  const ulp = Math.max(ulp_flush, ulp_noflush);
+  return new FPInterval(n - numULP * ulp, n + numULP * ulp);
 }
 
-export class CosFPIntervalBuilder implements FPUnaryIntervalBuilder {
-  private readonly builder;
+export function divInterval(x: number | FPInterval, y: number | FPInterval): FPInterval {
+  const numULP = 2.5;
 
-  public constructor() {
-    this.builder = new AbsoluteFPIntervalBuilder(2 ** -11);
-  }
-
-  public singular(x: number): FPInterval {
-    return FPInterval.span(this.impl(x), this.impl(flushSubnormalNumber(x)));
-  }
-
-  private impl(x: number): FPInterval {
-    return this.builder.singular(Math.cos(x));
-  }
-}
-
-export class SinFPIntervalBuilder implements FPUnaryIntervalBuilder {
-  private readonly builder;
-
-  public constructor() {
-    this.builder = new AbsoluteFPIntervalBuilder(2 ** -11);
-  }
-
-  public singular(x: number): FPInterval {
-    return FPInterval.span(this.impl(x), this.impl(flushSubnormalNumber(x)));
-  }
-
-  private impl(x: number): FPInterval {
-    return this.builder.singular(Math.sin(x));
-  }
-}
-
-export class DivisionFPIntervalBuilder implements FPBinaryIntervalBuilder {
-  private readonly builder;
-
-  public constructor() {
-    this.builder = new ULPFPIntervalBuilder(2.5);
-  }
-
-  public singular(x: number, y: number): FPInterval {
+  const div = (x: number, y: number): FPInterval => {
     assert(y !== 0, `division by 0 is not defined`);
-    return FPInterval.span(this.impl(x, y), this.impl(flushSubnormalNumber(x), y));
-  }
-
-  public range(ix: FPInterval, iy: FPInterval): FPInterval {
-    if (ix.begin === ix.end && iy.begin === iy.end) {
-      return this.singular(ix.begin, iy.begin);
-    }
     return FPInterval.span(
-      this.singular(ix.begin, iy.begin),
-      this.singular(ix.begin, iy.end),
-      this.singular(ix.end, iy.begin),
-      this.singular(ix.end, iy.end)
+      ulpInterval(x / y, numULP),
+      ulpInterval(flushSubnormalNumber(x) / y, numULP)
     );
-  }
+  };
 
-  private impl(x: number, y: number): FPInterval {
-    return this.builder.singular(x / y);
+  const x_b = begin(x);
+  const x_e = end(x);
+  const y_b = begin(y);
+  const y_e = end(y);
+
+  if (x_b === x_e && y_b === y_e) {
+    return div(x_b, y_b);
   }
+  return FPInterval.span(div(x_b, y_b), div(x_b, y_e), div(x_e, y_b), div(x_e, y_e));
 }
 
-export class TanFPIntervalBuilder implements FPUnaryIntervalBuilder {
-  private readonly cos_builder;
-  private readonly sin_builder;
-  private readonly divide_builder;
+export function cosInterval(n: number): FPInterval {
+  return flushInterval(n, (n: number) => absoluteInterval(Math.cos(n), 2 ** -11));
+}
 
-  public constructor() {
-    this.cos_builder = new CosFPIntervalBuilder();
-    this.sin_builder = new SinFPIntervalBuilder();
-    this.divide_builder = new DivisionFPIntervalBuilder();
-  }
+export function sinInterval(n: number): FPInterval {
+  return flushInterval(n, (n: number) => absoluteInterval(Math.sin(n), 2 ** -11));
+}
 
-  public singular(x: number): FPInterval {
-    return FPInterval.span(this.impl(x), this.impl(flushSubnormalNumber(x)));
-  }
-
-  private impl(x: number): FPInterval {
-    const cos_interval = this.cos_builder.singular(x);
-    const sin_interval = this.sin_builder.singular(x);
-    return this.divide_builder.range(sin_interval, cos_interval);
-  }
+export function tanInterval(n: number): FPInterval {
+  return flushInterval(n, (n: number) => divInterval(sinInterval(n), cosInterval(n)));
 }

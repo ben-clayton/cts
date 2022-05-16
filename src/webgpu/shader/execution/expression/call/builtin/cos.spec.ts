@@ -14,7 +14,7 @@ import { intervalComparator } from '../../../../../util/compare.js';
 import { f32, TypeF32 } from '../../../../../util/conversion.js';
 import { linearRange } from '../../../../../util/math.js';
 import { Case, run } from '../../expression.js';
-import { CosFPIntervalBuilder} from '../../../../../util/fp_interval.js';
+import { cosInterval } from '../../../../../util/fp_interval.js';
 
 import { builtin } from './builtin.js';
 
@@ -45,9 +45,8 @@ TODO(#792): Decide what the ground-truth is for these tests. [1]
       .combine('vectorize', [undefined, 2, 3, 4] as const)
   )
   .fn(async t => {
-    const builder = new CosFPIntervalBuilder();
     const makeCase = (x: number): Case => {
-      const interval = builder.singular(x);
+      const interval = cosInterval(x);
       return { input: f32(x), expected: intervalComparator(interval) };
     };
 

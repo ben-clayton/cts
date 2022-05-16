@@ -1,15 +1,14 @@
-
 export const description = `
 Execution Tests for the f32 arithmetic binary expression operations
 `;
 
 import { makeTestGroup } from '../../../../../common/framework/test_group.js';
 import { GPUTest } from '../../../../gpu_test.js';
-import { correctlyRoundedMatch, intervalComparator} from '../../../../util/compare.js';
+import { correctlyRoundedMatch, intervalComparator } from '../../../../util/compare.js';
 import { f32, TypeF32 } from '../../../../util/conversion.js';
 import { biasedRange, fullF32Range, quantizeToF32 } from '../../../../util/math.js';
 import { Case, Config, makeBinaryF32Case, run } from '../expression.js';
-import { DivisionFPIntervalBuilder } from '../../../../util/fp_interval';
+import { divInterval, FPInterval } from '../../../../util/fp_interval';
 
 import { binary } from './binary.js';
 
@@ -131,11 +130,10 @@ Accuracy: 2.5 ULP for |y| in the range [2^-126, 2^126]
       .combine('vectorize', [undefined, 2, 3, 4] as const)
   )
   .fn(async t => {
-    const builder = new DivisionFPIntervalBuilder();
     const makeCase = (lhs: number, rhs: number): Case => {
       lhs = quantizeToF32(lhs); // HACK: need to support both rounding modes over in the IntervalBuilders
       rhs = quantizeToF32(rhs); // HACK: need to support both rounding modes over in the IntervalBuilders
-      const interval = builder.singular(lhs, rhs);
+      const interval = divInterval(lhs, rhs);
       return { input: [f32(lhs), f32(rhs)], expected: intervalComparator(interval) };
     };
 
