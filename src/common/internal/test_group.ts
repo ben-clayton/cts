@@ -435,6 +435,7 @@ class RunCaseSpecific implements RunCase {
       const inst = new this.fixture(sharedState, rec, params);
       try {
         await inst.init();
+        console.timeStamp(`${this.id.test}`);
         await this.fn(inst as Fixture & { params: {} });
       } finally {
         // Runs as long as constructor succeeded, even if initialization or the test failed.

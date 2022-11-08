@@ -121,7 +121,7 @@ export class TestCaseRecorder {
   }
 
   private logImpl(level: LogSeverity, name: string, baseException: unknown): void {
-    assert(baseException instanceof Error, 'test threw a non-Error object');
+    assert(baseException instanceof Error, `test threw a non-Error object: ${baseException}`);
     globalTestConfig.testHeartbeatCallback();
     const logMessage = new LogMessageWithStack(name, baseException);
 

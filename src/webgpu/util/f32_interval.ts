@@ -2,6 +2,7 @@ import { assert, unreachable } from '../../common/util/util.js';
 import { Float16Array } from '../../external/petamoriken/float16/float16.js';
 
 import { kValue } from './constants.js';
+import { reinterpretF32AsU32, reinterpretU32AsF32 } from './conversion.js';
 import {
   cartesianProduct,
   correctlyRoundedF16,
@@ -97,6 +98,20 @@ export class F32Interval {
     }
     return this._any;
   }
+}
+
+export type SerializedF32Interval = { begin: number; end: number } | 'any';
+
+export function serializeF32Interval(i: F32Interval): SerializedF32Interval {
+  return i === F32Interval.any()
+    ? 'any'
+    : { begin: reinterpretF32AsU32(i.begin), end: reinterpretF32AsU32(i.end) };
+}
+
+export function deserializeF32Interval(data: SerializedF32Interval): F32Interval {
+  return data === 'any'
+    ? F32Interval.any()
+    : new F32Interval(reinterpretU32AsF32(data.begin), reinterpretU32AsF32(data.end));
 }
 
 /** @returns an interval containing the point or the original interval */
