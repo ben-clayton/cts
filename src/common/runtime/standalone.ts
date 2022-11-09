@@ -112,11 +112,13 @@ function makeCaseHTML(t: TestTreeLeaf): VisualizedSubtree {
     haveSomeResults = true;
     const [rec, res] = logger.record(name);
     caseResult = res;
+    console.time(name);
     if (worker) {
       await worker.run(rec, name);
     } else {
       await t.run(rec);
     }
+    console.timeEnd(name);
 
     result.total++;
     result.timems += caseResult.timems;
@@ -331,7 +333,12 @@ function makeTreeNodeHeaderHTML(
     .addClass(isLeaf ? 'leafrun' : 'subtreerun')
     .attr('alt', runtext)
     .attr('title', runtext)
-    .on('click', () => void runSubtree())
+    .on('click', () => {
+      console.time('CTS-RUN');
+      void runSubtree().then(() => {
+        console.timeEnd('CTS-RUN');
+      });
+    })
     .appendTo(header);
   $('<a>')
     .addClass('nodelink')
