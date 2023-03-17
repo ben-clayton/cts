@@ -25,7 +25,7 @@ import { multiplyMatrices } from './math.js';
  * for negative values,  linear portion is extended on reflection of axis,
  * then reflected power function is used.
  */
-function lin_sRGB(RGB: Array<number>) {
+export function lin_sRGB(RGB: Array<number>) {
   return RGB.map(val => {
     const sign = val < 0 ? -1 : 1;
     const abs = Math.abs(val);
@@ -46,7 +46,7 @@ function lin_sRGB(RGB: Array<number>) {
  * For negative values, linear portion extends on reflection
  * of axis, then uses reflected pow below that
  */
-function gam_sRGB(RGB: Array<number>) {
+export function gam_sRGB(RGB: Array<number>) {
   return RGB.map(val => {
     const sign = val < 0 ? -1 : 1;
     const abs = Math.abs(val);

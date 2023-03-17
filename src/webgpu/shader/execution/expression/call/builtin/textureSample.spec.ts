@@ -8,6 +8,17 @@ Must only be invoked in uniform control flow.
 import { makeTestGroup } from '../../../../../../common/framework/test_group.js';
 import { GPUTest } from '../../../../../gpu_test.js';
 
+import {
+  useImageInFragmentShader,
+  fillImageWithRandomTexels,
+  imageFormat,
+  compareImageTexels,
+  createImage,
+  float32,
+  vec2,
+  filterableImageFormats,
+  TextureArgs,
+} from './texture_utils.js';
 import { generateCoordBoundaries, generateOffsets } from './utils.js';
 
 export const g = makeTestGroup(GPUTest);
@@ -70,13 +81,44 @@ Parameters:
       Values outside of this range will result in a shader-creation error.
 `
   )
-  .paramsSubcasesOnly(u =>
+  .params(u =>
     u
+      .combine('format', [...filterableImageFormats().keys()])
+      .beginSubcases()
       .combine('S', ['clamp-to-edge', 'repeat', 'mirror-repeat'] as const)
       .combine('coords', generateCoordBoundaries(2))
       .combine('offset', generateOffsets(2))
   )
-  .unimplemented();
+  .beforeAllSubcases(t => {
+    const format = imageFormat(t.params.format);
+    if (format.components.some(c => c.dataType === float32)) {
+      t.selectDeviceOrSkipTestCase('float32-filterable');
+    }
+  })
+  .fn(async t => {
+    const image = createImage({
+      format: imageFormat(t.params.format),
+      width: 8,
+      height: 8,
+      depth: 1,
+      mipLevels: 1,
+      arrayLayers: 1,
+      samples: 1,
+    });
+    fillImageWithRandomTexels(image);
+    const args: TextureArgs<vec2>[] = [];
+    for (let y = 0; y < 8; y++) {
+      for (let x = 0; x < 8; x++) {
+        args.push({ coords: [(x + 0.5) / 8, (y + 0.5) / 8] });
+      }
+    }
+    const got = await useImageInFragmentShader(t.device, image, {
+      op: 'textureSample',
+      coordType: 'f',
+      args,
+    });
+    t.expectOK(compareImageTexels(got, image, 0.01));
+  });
 
 g.test('sampled_3d_coords')
   .specURL('https://www.w3.org/TR/WGSL/#texturesample')

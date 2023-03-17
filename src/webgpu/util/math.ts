@@ -1075,6 +1075,11 @@ export interface QuantizeFunc {
   (num: number): number;
 }
 
+/** @returns the closest 16-bit floating point value to the input */
+export function quantizeToF16(num: number): number {
+  return f16(num).value as number;
+}
+
 /** @returns the closest 32-bit floating point value to the input */
 export function quantizeToF32(num: number): number {
   return f32(num).value as number;
@@ -1134,6 +1139,22 @@ export function hexToF64(h32: number, l32: number): number {
   u32Arr[1] = h32;
   const f64Arr = new Float64Array(u32Arr.buffer);
   return f64Arr[0];
+}
+
+/** @returns an integer value between 0..0xffffffff using a simple non-cryptographic hash function */
+export function hashU32s(...values: number[]) {
+  let n = 0x3504_f333;
+  for (const v of values) {
+    n = v + (n << 7) + (n >>> 1);
+    n = (n * 0x29493) & 0xffff_ffff;
+  }
+  n ^= n >>> 8;
+  n += n << 15;
+  n = n & 0xffff_ffff;
+  if (n < 0) {
+    n = ~n * 2 + 1;
+  }
+  return n;
 }
 
 /** @returns the cross of an array with the intermediate result of cartesianProduct
