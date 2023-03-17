@@ -231,41 +231,33 @@ export function packRGB9E5UFloat(r: number, g: number, b: number): number {
     assert(v >= 0 && v < Math.pow(2, 16));
   }
 
-  const buf = new DataView(new ArrayBuffer(Float32Array.BYTES_PER_ELEMENT));
-  const extractMantissaAndExponent = (n: number) => {
-    const mantissaBits = 9;
-    buf.setFloat32(0, n, true);
-    const bits = buf.getUint32(0, true);
-    // >> to remove mantissa, & to remove sign
-    let biasedExponent = (bits >> 23) & 0xff;
-    const mantissaBitsToDiscard = 23 - mantissaBits;
-    let mantissa = (bits & 0x7fffff) >> mantissaBitsToDiscard;
+  const largest = Math.max(r, g, b);
+  const exp = clamp(Math.ceil(Math.log2(largest)), { min: -15, max: 16 });
+  const max = Math.pow(2, exp);
+  const rBits = Math.floor(0b111111111 * (r / max));
+  const gBits = Math.floor(0b111111111 * (g / max));
+  const bBits = Math.floor(0b111111111 * (b / max));
 
-    // RGB9E5UFloat has an implicit leading 0. instead of a leading 1.,
-    // so we need to move the 1. into the mantissa and bump the exponent.
-    // For float32 encoding, the leading 1 is only present if the biased
-    // exponent is non-zero.
-    if (biasedExponent !== 0) {
-      mantissa = (mantissa >> 1) | 0b100000000;
-      biasedExponent += 1;
-    }
-    return { biasedExponent, mantissa };
-  };
-
-  const { biasedExponent: rExp, mantissa: rOrigMantissa } = extractMantissaAndExponent(r);
-  const { biasedExponent: gExp, mantissa: gOrigMantissa } = extractMantissaAndExponent(g);
-  const { biasedExponent: bExp, mantissa: bOrigMantissa } = extractMantissaAndExponent(b);
-
-  // Use the largest exponent, and shift the mantissa accordingly
-  const exp = Math.max(rExp, gExp, bExp);
-  const rMantissa = rOrigMantissa >> (exp - rExp);
-  const gMantissa = gOrigMantissa >> (exp - gExp);
-  const bMantissa = bOrigMantissa >> (exp - bExp);
-
-  const bias = 15;
-  const biasedExp = exp === 0 ? 0 : exp - 127 + bias;
+  const biasedExp = exp + 15;
   assert(biasedExp >= 0 && biasedExp <= 31);
-  return rMantissa | (gMantissa << 9) | (bMantissa << 18) | (biasedExp << 27);
+  return rBits | (gBits << 9) | (bBits << 18) | (biasedExp << 27);
+}
+
+/**
+ * Decodes a RGB9E5 encoded color.
+ * @see packRGB9E5UFloat
+ */
+export function unpackRGB9E5UFloat(encoded: number): { R: number; G: number; B: number } {
+  const rBits = (encoded >>> 0) & 0x111111111;
+  const gBits = (encoded >>> 5) & 0x111111111;
+  const bBits = (encoded >>> 10) & 0x111111111;
+  const expBits = (encoded >>> 27) & 0b11111;
+  const exp = Math.pow(2, expBits - 15);
+  return {
+    R: (exp * rBits) / 0x111111111,
+    G: (exp * gBits) / 0x111111111,
+    B: (exp * bBits) / 0x111111111,
+  };
 }
 
 /**

@@ -84,6 +84,10 @@ export const kGeneratableErrorScopeFilters = kErrorScopeFilters.filter(
 
 // Canvases
 
+export const kFilterableColorTextureFormats = kRegularTextureFormats.filter(
+  v => kColorTextureFormatInfo[v].sampleType === 'float'
+);
+
 // The formats of GPUTextureFormat for canvas context.
 export const kCanvasTextureFormats = ['bgra8unorm', 'rgba8unorm', 'rgba16float'] as const;
 

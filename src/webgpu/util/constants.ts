@@ -121,6 +121,24 @@ export const kBit = {
     },
   },
 
+  // Limits of int16
+  i16: {
+    positive: {
+      min: 0x0000, // 0
+      max: 0x7fff, // 32767
+    },
+    negative: {
+      min: 0x8000, // -32768
+      max: 0x0000, // 0
+    },
+  },
+
+  // Limits of uint16
+  u16: {
+    min: 0x0000,
+    max: 0xffff,
+  },
+
   // Limits of f16
   f16: {
     positive: {
@@ -169,6 +187,24 @@ export const kBit = {
       positive: 0x7c00,
       negative: 0xfc00,
     },
+  },
+
+  // Limits of int8
+  i8: {
+    positive: {
+      min: 0x00, // 0
+      max: 0x7f, // 127
+    },
+    negative: {
+      min: 0x80, // -128
+      max: 0x00, // 0
+    },
+  },
+
+  // Limits of uint8
+  u8: {
+    min: 0x00,
+    max: 0xff,
   },
 
   // 32-bit representation of power(2, n) n = {-31, ..., 31}

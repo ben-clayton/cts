@@ -6,11 +6,24 @@ Must only be invoked in uniform control flow.
 `;
 
 import { makeTestGroup } from '../../../../../../common/framework/test_group.js';
-import { GPUTest } from '../../../../../gpu_test.js';
+import { kFilterableColorTextureFormats } from '../../../../../capability_info.js';
+import { GPUTest, TextureTestMixin } from '../../../../../gpu_test.js';
+import { hashU32 } from '../../../../../util/math.js';
+import { kTexelRepresentationInfo } from '../../../../../util/texture/texel_data.js';
 
+import {
+  doTextureCalls,
+  vec2,
+  createRandomTexelView,
+  TextureCall,
+  checkResults,
+  generateSamplePoints,
+  kSamplePointMethods,
+  Texture,
+} from './texture_utils.js';
 import { generateCoordBoundaries, generateOffsets } from './utils.js';
 
-export const g = makeTestGroup(GPUTest);
+export const g = makeTestGroup(TextureTestMixin(GPUTest));
 
 g.test('stage')
   .specURL('https://www.w3.org/TR/WGSL/#texturesample')
@@ -70,13 +83,62 @@ Parameters:
       Values outside of this range will result in a shader-creation error.
 `
   )
-  .paramsSubcasesOnly(u =>
-    u
-      .combine('S', ['clamp-to-edge', 'repeat', 'mirror-repeat'] as const)
-      .combine('coords', generateCoordBoundaries(2))
-      .combine('offset', generateOffsets(2))
+  .params(
+    u =>
+      u
+        .combine('format', kFilterableColorTextureFormats)
+        .combine('sample_points', kSamplePointMethods)
+        .combine('addressModeU', ['clamp-to-edge', 'repeat', 'mirror-repeat'] as const)
+        .combine('addressModeV', ['clamp-to-edge', 'repeat', 'mirror-repeat'] as const)
+        .combine('minFilter', ['nearest', 'linear'] as const)
+        .combine('offset', [true, false] as const)
+    // .combine('magFilter', ['nearest', 'linear'] as const)
+    // .combine('clamping', ['clamp-to-edge', 'repeat', 'mirror-repeat'] as const)
   )
-  .unimplemented();
+  .beforeAllSubcases(t => {
+    const format = kTexelRepresentationInfo[t.params.format];
+    const hasFloat32 = format.componentOrder.some(c => {
+      const info = format.componentInfo[c]!;
+      return info.dataType === 'float' && info.bitLength === 32;
+    });
+    if (hasFloat32) {
+      t.selectDeviceOrSkipTestCase('float32-filterable');
+    }
+  })
+  .fn(async t => {
+    const textureInfo: GPUTextureDescriptor = {
+      format: t.params.format,
+      size: { width: 8, height: 8 },
+      usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
+    };
+    const texelView = createRandomTexelView(textureInfo);
+    const calls: TextureCall<vec2>[] = generateSamplePoints(50, {
+      method: t.params.sample_points,
+      textureWidth: 8,
+      textureHeight: 8,
+    }).map((c, i) => {
+      const hash = hashU32(i) & 0xff;
+      return {
+        builtin: 'textureSample',
+        coordType: 'f',
+        coords: c,
+        offset: t.params.offset ? [(hash & 15) - 8, ((hash >> 8) & 15) - 8] : undefined,
+      };
+    });
+    const sampler: GPUSamplerDescriptor = {
+      addressModeU: t.params.addressModeU,
+      addressModeV: t.params.addressModeV,
+      minFilter: t.params.minFilter,
+      magFilter: t.params.minFilter, // TODO(derivatives)
+    };
+    const res = await checkResults(
+      t.device,
+      { texels: texelView, info: textureInfo },
+      sampler,
+      calls
+    );
+    t.expectOK(res);
+  });
 
 g.test('sampled_3d_coords')
   .specURL('https://www.w3.org/TR/WGSL/#texturesample')
