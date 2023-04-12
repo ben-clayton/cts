@@ -1,3 +1,4 @@
+import { deepCompare } from '../../webgpu/util/deep_compare.js';
 import { TestCaseRecorder } from '../internal/logging/test_case_recorder.js';
 import { JSONWithUndefined } from '../internal/params_utils.js';
 import { assert, unreachable } from '../util/util.js';
@@ -283,6 +284,27 @@ export class Fixture<S extends SubcaseBatchState = SubcaseBatchState> {
       this.rec.expectationFailed(new Error(msg));
     }
     return cond;
+  }
+
+  /** Expect the given value is equal to expected, by using ===. */
+  expectEqual<T>(name: string, got: T, expect: T): boolean {
+    if (got === expect) {
+      return this.expect(true, `${name} is as expected`);
+    }
+    return this.expect(false, `${name} is not as expected. got: ${got}, expect: ${expect}`);
+  }
+
+  /** Expect the given value is equal to expected, by performing a deep comparison. */
+  expectDeepEqual<T>(name: string, got: T, expect: T): boolean {
+    const diff = deepCompare(got, expect, 'got', 'expect');
+    if (diff.length === 0) {
+      return this.expect(true, `${name} is as expected`);
+    }
+    return this.expect(
+      false,
+      `${name} is not as expected:
+${diff.join('\n')}`
+    );
   }
 
   /**

@@ -43,7 +43,10 @@ export function checkElementsEqual(
   expected: TypedArrayBufferView
 ): ErrorWithExtra | undefined {
   assert(actual.constructor === expected.constructor, 'TypedArray type mismatch');
-  assert(actual.length === expected.length, 'size mismatch');
+  assert(
+    actual.length === expected.length,
+    `size mismatch - actual.length: ${actual.length}, expected.length: ${expected.length}`
+  );
   return checkElementsEqualGenerated(actual, i => expected[i]);
 }
 
